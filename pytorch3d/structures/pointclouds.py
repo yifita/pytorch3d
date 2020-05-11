@@ -647,7 +647,7 @@ class Pointclouds(object):
                 new_normals = self.normals_padded().clone()
             if features_padded is not None:
                 new_features = self.features_padded().clone()
-        other = Pointclouds(
+        other = self.__class__(
             points=new_points, normals=new_normals, features=new_features
         )
         for k in self._INTERNAL_TENSORS:

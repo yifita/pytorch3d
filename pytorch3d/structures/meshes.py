@@ -1127,7 +1127,7 @@ class Meshes(object):
         faces_list = self.faces_list()
         new_verts_list = [v.clone() for v in verts_list]
         new_faces_list = [f.clone() for f in faces_list]
-        other = Meshes(verts=new_verts_list, faces=new_faces_list)
+        other = self.__class__(verts=new_verts_list, faces=new_faces_list)
         for k in self._INTERNAL_TENSORS:
             v = getattr(self, k)
             if torch.is_tensor(v):
