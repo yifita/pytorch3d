@@ -448,7 +448,7 @@ class TestRasterizeMeshes(TestCaseMixin, unittest.TestCase):
         ], dtype=torch.int64, device=device)
         # fmt: on
 
-        pix_to_face_padded = -torch.ones_like(pix_to_face_frontface)
+        pix_to_face_padded = -(torch.ones_like(pix_to_face_frontface))
         # Run with and without culling
         # Without culling, for k=0, the front face (i.e. face 2) is
         # rasterized and for k=1, the back face (i.e. face 3) is
@@ -507,7 +507,7 @@ class TestRasterizeMeshes(TestCaseMixin, unittest.TestCase):
         grad_var1.grad.data.zero_()
         loss2.backward()
         grad_verts2 = grad_var2.grad.data.clone().cpu()
-        self.assertClose(grad_verts1, grad_verts2, rtol=1e-3)
+        self.assertClose(grad_verts1, grad_verts2, rtol=2e-3)
 
     def _test_perspective_correct(self, rasterize_meshes_fn, device, bin_size=None):
         # fmt: off
