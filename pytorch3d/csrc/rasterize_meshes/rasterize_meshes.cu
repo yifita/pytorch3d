@@ -321,7 +321,7 @@ RasterizeMeshesNaiveCuda(
   const int W = image_size;
   const int K = num_closest;
 
-  auto long_opts = face_verts.options().dtype(at::kLong);
+  auto long_opts = num_faces_per_mesh.options().dtype(at::kLong);
   auto float_opts = face_verts.options().dtype(at::kFloat);
 
   at::Tensor face_idxs = at::full({N, H, W, K}, -1, long_opts);
@@ -348,10 +348,10 @@ RasterizeMeshesNaiveCuda(
       H,
       W,
       K,
-      face_idxs.contiguous().data_ptr<int64_t>(),
-      zbuf.contiguous().data_ptr<float>(),
-      pix_dists.contiguous().data_ptr<float>(),
-      bary.contiguous().data_ptr<float>());
+      face_idxs.data_ptr<int64_t>(),
+      zbuf.data_ptr<float>(),
+      pix_dists.data_ptr<float>(),
+      bary.data_ptr<float>());
 
   AT_CUDA_CHECK(cudaGetLastError());
   return std::make_tuple(face_idxs, zbuf, bary, pix_dists);
@@ -530,7 +530,7 @@ at::Tensor RasterizeMeshesBackwardCuda(
       grad_zbuf.contiguous().data_ptr<float>(),
       grad_bary.contiguous().data_ptr<float>(),
       grad_dists.contiguous().data_ptr<float>(),
-      grad_face_verts.contiguous().data_ptr<float>());
+      grad_face_verts.data_ptr<float>());
 
   AT_CUDA_CHECK(cudaGetLastError());
   return grad_face_verts;
@@ -701,7 +701,7 @@ at::Tensor RasterizeMeshesCoarseCuda(
     ss << "Got " << num_bins << "; that's too many!";
     AT_ERROR(ss.str());
   }
-  auto opts = face_verts.options().dtype(at::kInt);
+  auto opts = num_faces_per_mesh.options().dtype(at::kInt);
   at::Tensor faces_per_bin = at::zeros({N, num_bins, num_bins}, opts);
   at::Tensor bin_faces = at::full({N, num_bins, num_bins, M}, -1, opts);
 
@@ -727,8 +727,8 @@ at::Tensor RasterizeMeshesCoarseCuda(
       bin_size,
       chunk_size,
       M,
-      faces_per_bin.contiguous().data_ptr<int32_t>(),
-      bin_faces.contiguous().data_ptr<int32_t>());
+      faces_per_bin.data_ptr<int32_t>(),
+      bin_faces.data_ptr<int32_t>());
 
   AT_CUDA_CHECK(cudaGetLastError());
   return bin_faces;
@@ -868,7 +868,7 @@ RasterizeMeshesFineCuda(
   if (K > kMaxPointsPerPixel) {
     AT_ERROR("Must have num_closest <= 150");
   }
-  auto long_opts = face_verts.options().dtype(at::kLong);
+  auto long_opts = bin_faces.options().dtype(at::kLong);
   auto float_opts = face_verts.options().dtype(at::kFloat);
 
   at::Tensor face_idxs = at::full({N, H, W, K}, -1, long_opts);
@@ -897,10 +897,10 @@ RasterizeMeshesFineCuda(
       H,
       W,
       K,
-      face_idxs.contiguous().data_ptr<int64_t>(),
-      zbuf.contiguous().data_ptr<float>(),
-      pix_dists.contiguous().data_ptr<float>(),
-      bary.contiguous().data_ptr<float>());
+      face_idxs.data_ptr<int64_t>(),
+      zbuf.data_ptr<float>(),
+      pix_dists.data_ptr<float>(),
+      bary.data_ptr<float>());
 
   return std::make_tuple(face_idxs, zbuf, bary, pix_dists);
 }

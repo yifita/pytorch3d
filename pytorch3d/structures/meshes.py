@@ -436,9 +436,9 @@ class Meshes(object):
         textures = None if self.textures is None else self.textures[index]
 
         if torch.is_tensor(verts) and torch.is_tensor(faces):
-            return Meshes(verts=[verts], faces=[faces], textures=textures)
+            return self.__class__(verts=[verts], faces=[faces], textures=textures)
         elif isinstance(verts, list) and isinstance(faces, list):
-            return Meshes(verts=verts, faces=faces, textures=textures)
+            return self.__class__(verts=verts, faces=faces, textures=textures)
         else:
             raise ValueError("(verts, faces) not defined correctly")
 
@@ -1370,7 +1370,7 @@ class Meshes(object):
         if self.textures is not None:
             tex = self.textures.extend(N)
 
-        return Meshes(verts=new_verts_list, faces=new_faces_list, textures=tex)
+        return self.__class__(verts=new_verts_list, faces=new_faces_list, textures=tex)
 
 
 def join_meshes_as_batch(meshes: List[Meshes], include_textures: bool = True):
