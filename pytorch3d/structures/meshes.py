@@ -1,6 +1,6 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All rights reserved.
 
-from typing import List
+from typing import List, Union
 
 import torch
 
@@ -329,11 +329,11 @@ class Meshes(object):
                 self._num_verts_per_mesh = torch.tensor(
                     [len(v) for v in self._verts_list], device=self.device
                 )
-                self._V = self._num_verts_per_mesh.max()
+                self._V = int(self._num_verts_per_mesh.max())
                 self._num_faces_per_mesh = torch.tensor(
                     [len(f) for f in self._faces_list], device=self.device
                 )
-                self._F = self._num_faces_per_mesh.max()
+                self._F = int(self._num_faces_per_mesh.max())
                 self.valid = torch.tensor(
                     [
                         len(v) > 0 and len(f) > 0
@@ -370,7 +370,7 @@ class Meshes(object):
                 # as long as the faces index correspond to the right vertices.
 
                 self.valid = self._num_faces_per_mesh > 0
-                self._F = self._num_faces_per_mesh.max()
+                self._F = int(self._num_faces_per_mesh.max())
                 if len(self._num_faces_per_mesh.unique()) == 1:
                     self.equisized = True
 
@@ -1539,3 +1539,28 @@ def join_meshes_as_batch(meshes: List[Meshes], include_textures: bool = True):
 
     tex = Textures(**kwargs)
     return Meshes(verts=verts, faces=faces, textures=tex)
+
+
+def join_mesh(meshes: Union[Meshes, List[Meshes]]) -> Meshes:
+    """
+    Joins a batch of meshes in the form of a Meshes object or a list of Meshes
+    objects as a single mesh. If the input is a list, the Meshes objects in the list
+    must all be on the same device. This version ignores all textures in the input mehses.
+
+    Args:
+        meshes: Meshes object that contains a batch of meshes or a list of Meshes objects
+
+    Returns:
+        new Meshes object containing a single mesh
+    """
+    if isinstance(meshes, List):
+        meshes = join_meshes_as_batch(meshes, include_textures=False)
+
+    if len(meshes) == 1:
+        return meshes
+    verts = meshes.verts_packed()  # (sum(V_n), 3)
+    # Offset automatically done by faces_packed
+    faces = meshes.faces_packed()  # (sum(F_n), 3)
+
+    mesh = Meshes(verts=verts.unsqueeze(0), faces=faces.unsqueeze(0))
+    return mesh
