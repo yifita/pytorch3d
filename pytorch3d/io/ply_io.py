@@ -4,7 +4,6 @@
 
 
 """This module implements utility functions for loading and saving meshes."""
-import pathlib
 import struct
 import sys
 import warnings
@@ -13,6 +12,7 @@ from typing import Optional, Tuple
 
 import numpy as np
 import torch
+from pytorch3d.io.utils import _open_file
 
 
 _PlyTypeData = namedtuple("_PlyTypeData", "size struct_char np_type")
@@ -603,19 +603,8 @@ def _load_ply_raw(f) -> Tuple[_PlyHeader, dict]:
                   uniformly-sized list, then the value will be a 2D numpy array.
                   If not, it is a list of the relevant property values.
     """
-    new_f = False
-    if isinstance(f, str):
-        new_f = True
-        f = open(f, "rb")
-    elif isinstance(f, pathlib.Path):
-        new_f = True
-        f = f.open("rb")
-    try:
+    with _open_file(f, "rb") as f:
         header, elements = _load_ply_raw_stream(f)
-    finally:
-        if new_f:
-            f.close()
-
     return header, elements
 
 
@@ -783,7 +772,11 @@ def save_ply(
         decimal_places: Number of decimal places for saving.
     """
 
-    verts_normals = torch.FloatTensor([]) if verts_normals is None else verts_normals
+    verts_normals = (
+        torch.tensor([], dtype=torch.float32, device=verts.device)
+        if verts_normals is None
+        else verts_normals
+    )
     faces = torch.LongTensor([]) if faces is None else faces
 
     if len(verts) and not (verts.dim() == 2 and verts.size(1) == 3):
@@ -802,15 +795,5 @@ def save_ply(
         message = "Argument 'verts_normals' should either be empty or of shape (num_verts, 3)."
         raise ValueError(message)
 
-    new_f = False
-    if isinstance(f, str):
-        new_f = True
-        f = open(f, "w")
-    elif isinstance(f, pathlib.Path):
-        new_f = True
-        f = f.open("w")
-    try:
+    with _open_file(f, "w") as f:
         _save_ply(f, verts, faces, verts_normals, decimal_places)
-    finally:
-        if new_f:
-            f.close()

@@ -3,7 +3,6 @@
 
 """This module implements utility functions for loading and saving meshes."""
 import os
-import pathlib
 import warnings
 from collections import namedtuple
 from typing import Optional
@@ -73,7 +72,7 @@ def _format_faces_indices(faces_indices, max_index, device, pad_value=None):
 
 
 def load_obj(
-    f_obj,
+    f,
     load_textures=True,
     create_texture_atlas: bool = False,
     texture_atlas_size: int = 4,
@@ -212,14 +211,13 @@ def load_obj(
               None.
     """
     data_dir = "./"
-    if isinstance(f_obj, (str, bytes, os.PathLike)):
+    if isinstance(f, (str, bytes, os.PathLike)):
         # pyre-fixme[6]: Expected `_PathLike[Variable[typing.AnyStr <: [str,
         #  bytes]]]` for 1st param but got `Union[_PathLike[typing.Any], bytes, str]`.
-        data_dir = os.path.dirname(f_obj)
-    f_obj, new_f = _open_file(f_obj)
-    try:
-        return _load(
-            f_obj,
+        data_dir = os.path.dirname(f)
+    with _open_file(f, "r") as f:
+        return _load_obj(
+            f,
             data_dir,
             load_textures=load_textures,
             create_texture_atlas=create_texture_atlas,
@@ -227,9 +225,6 @@ def load_obj(
             texture_wrap=texture_wrap,
             device=device,
         )
-    finally:
-        if new_f:
-            f_obj.close()
 
 
 def load_objs_as_meshes(files: list, device=None, load_textures: bool = True):
@@ -339,7 +334,7 @@ def _parse_face(
         faces_materials_idx.append(material_idx)
 
 
-def _load(
+def _load_obj(
     f_obj,
     data_dir,
     load_textures: bool = True,
@@ -524,18 +519,8 @@ def save_obj(f, verts, faces, decimal_places: Optional[int] = None):
         message = "Argument 'faces' should either be empty or of shape (num_faces, 3)."
         raise ValueError(message)
 
-    new_f = False
-    if isinstance(f, str):
-        new_f = True
-        f = open(f, "w")
-    elif isinstance(f, pathlib.Path):
-        new_f = True
-        f = f.open("w")
-    try:
+    with _open_file(f, "w") as f:
         return _save(f, verts, faces, decimal_places)
-    finally:
-        if new_f:
-            f.close()
 
 
 # TODO (nikhilar) Speed up this function.
