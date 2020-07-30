@@ -13,8 +13,8 @@ from pytorch3d.renderer import (
     OpenGLPerspectiveCameras,
     PointLights,
     RasterizationSettings,
+    TexturesVertex,
 )
-from pytorch3d.structures import Textures
 
 
 class ShapeNetBase(torch.utils.data.Dataset):
@@ -31,8 +31,8 @@ class ShapeNetBase(torch.utils.data.Dataset):
         self.synset_ids = []
         self.model_ids = []
         self.synset_inv = {}
-        self.synset_starts = {}
-        self.synset_lens = {}
+        self.synset_start_idxs = {}
+        self.synset_num_models = {}
         self.shapenet_dir = ""
         self.model_dir = "model.obj"
 
@@ -113,8 +113,8 @@ class ShapeNetBase(torch.utils.data.Dataset):
         """
         paths = self._handle_render_inputs(model_ids, categories, sample_nums, idxs)
         meshes = load_objs_as_meshes(paths, device=device, load_textures=False)
-        meshes.textures = Textures(
-            verts_rgb=torch.ones_like(meshes.verts_padded(), device=device)
+        meshes.textures = TexturesVertex(
+            verts_features=torch.ones_like(meshes.verts_padded(), device=device)
         )
         cameras = kwargs.get("cameras", OpenGLPerspectiveCameras()).to(device)
         renderer = MeshRenderer(
@@ -227,9 +227,9 @@ class ShapeNetBase(torch.utils.data.Dataset):
             category: category synset of the category to be sampled from. If not
                 specified, sample from all models in the loaded dataset.
         """
-        start = self.synset_starts[category] if category is not None else 0
+        start = self.synset_start_idxs[category] if category is not None else 0
         range_len = (
-            self.synset_lens[category] if category is not None else self.__len__()
+            self.synset_num_models[category] if category is not None else self.__len__()
         )
         replacement = sample_num > range_len
         sampled_idxs = (
