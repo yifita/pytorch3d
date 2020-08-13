@@ -11,7 +11,12 @@ import numpy as np
 import torch
 from common_testing import TestCaseMixin, load_rgb_image
 from PIL import Image
-from pytorch3d.datasets import R2N2, BlenderCamera, collate_batched_meshes
+from pytorch3d.datasets import (
+    R2N2,
+    BlenderCamera,
+    collate_batched_R2N2,
+    render_cubified_voxels,
+)
 from pytorch3d.renderer import (
     OpenGLPerspectiveCameras,
     PointLights,
@@ -62,8 +67,10 @@ class TestR2N2(TestCaseMixin, unittest.TestCase):
         Test the loaded train split of R2N2 return items of the correct shapes and types. Also
         check the first image returned is correct.
         """
-        # Load dataset in the test split.
-        r2n2_dataset = R2N2("test", SHAPENET_PATH, R2N2_PATH, SPLITS_PATH)
+        # Load dataset in the train split.
+        r2n2_dataset = R2N2(
+            "test", SHAPENET_PATH, R2N2_PATH, SPLITS_PATH, return_voxels=True
+        )
 
         # Check total number of objects in the dataset is correct.
         with open(SPLITS_PATH) as splits:
@@ -93,10 +100,18 @@ class TestR2N2(TestCaseMixin, unittest.TestCase):
         self.assertEqual(faces.ndim, 2)
         self.assertEqual(faces.shape[-1], 3)
 
+        # Check that the intrinsic matrix and extrinsic matrix have the
+        # correct shapes.
+        self.assertEqual(r2n2_obj["R"].shape[0], 24)
+        self.assertEqual(r2n2_obj["R"].shape[1:], (3, 3))
+        self.assertEqual(r2n2_obj["T"].ndim, 2)
+        self.assertEqual(r2n2_obj["T"].shape[1], 3)
+        self.assertEqual(r2n2_obj["K"].ndim, 3)
+        self.assertEqual(r2n2_obj["K"].shape[1:], (4, 4))
+
         # Check that image batch returned by __getitem__ has the correct shape.
         self.assertEqual(r2n2_obj["images"].shape[0], 24)
-        self.assertEqual(r2n2_obj["images"].shape[1], 137)
-        self.assertEqual(r2n2_obj["images"].shape[2], 137)
+        self.assertEqual(r2n2_obj["images"].shape[1:-1], (137, 137))
         self.assertEqual(r2n2_obj["images"].shape[-1], 3)
         self.assertEqual(r2n2_dataset[39, [21]]["images"].shape[0], 1)
         self.assertEqual(r2n2_dataset[39, torch.tensor([12, 21])]["images"].shape[0], 2)
@@ -106,6 +121,10 @@ class TestR2N2(TestCaseMixin, unittest.TestCase):
         self.assertEqual(r2n2_dataset[635]["images"].shape[0], 5)
         self.assertEqual(r2n2_dataset[8369]["images"].shape[0], 10)
 
+        # Check that the voxel tensor returned by __getitem__ has the correct shape.
+        self.assertEqual(r2n2_obj["voxels"].ndim, 4)
+        self.assertEqual(r2n2_obj["voxels"].shape, (24, 128, 128, 128))
+
     def test_collate_models(self):
         """
         Test collate_batched_meshes returns items of the correct shapes and types.
@@ -113,10 +132,12 @@ class TestR2N2(TestCaseMixin, unittest.TestCase):
         the correct shapes and types are returned.
         """
         # Load dataset in the train split.
-        r2n2_dataset = R2N2("train", SHAPENET_PATH, R2N2_PATH, SPLITS_PATH)
+        r2n2_dataset = R2N2(
+            "val", SHAPENET_PATH, R2N2_PATH, SPLITS_PATH, return_voxels=True
+        )
 
         # Randomly retrieve several objects from the dataset and collate them.
-        collated_meshes = collate_batched_meshes(
+        collated_meshes = collate_batched_R2N2(
             [r2n2_dataset[idx] for idx in torch.randint(len(r2n2_dataset), (6,))]
         )
         # Check the collated verts and faces have the correct shapes.
@@ -137,7 +158,7 @@ class TestR2N2(TestCaseMixin, unittest.TestCase):
         # in batch have the correct shape.
         batch_size = 12
         r2n2_loader = DataLoader(
-            r2n2_dataset, batch_size=batch_size, collate_fn=collate_batched_meshes
+            r2n2_dataset, batch_size=batch_size, collate_fn=collate_batched_R2N2
         )
         it = iter(r2n2_loader)
         object_batch = next(it)
@@ -147,6 +168,10 @@ class TestR2N2(TestCaseMixin, unittest.TestCase):
         self.assertEqual(object_batch["mesh"].verts_padded().shape[0], batch_size)
         self.assertEqual(object_batch["mesh"].faces_padded().shape[0], batch_size)
         self.assertEqual(object_batch["images"].shape[0], batch_size)
+        self.assertEqual(object_batch["R"].shape[0], batch_size)
+        self.assertEqual(object_batch["T"].shape[0], batch_size)
+        self.assertEqual(object_batch["K"].shape[0], batch_size)
+        self.assertEqual(len(object_batch["voxels"]), batch_size)
 
     def test_catch_render_arg_errors(self):
         """
@@ -165,6 +190,13 @@ class TestR2N2(TestCaseMixin, unittest.TestCase):
         with self.assertRaises(IndexError) as err:
             r2n2_dataset.render(idxs=[1000000])
         self.assertTrue("are out of bounds" in str(err.exception))
+
+        blend_cameras = BlenderCamera(
+            R=torch.rand((3, 3, 3)), T=torch.rand((3, 3)), K=torch.rand((3, 4, 4))
+        )
+        with self.assertRaises(ValueError) as err:
+            r2n2_dataset.render(idxs=[10, 11], cameras=blend_cameras)
+        self.assertTrue("Mismatch between batch dims" in str(err.exception))
 
     def test_render_r2n2(self):
         """
@@ -279,3 +311,65 @@ class TestR2N2(TestCaseMixin, unittest.TestCase):
         C = cam.get_camera_center()
         C_ = -torch.bmm(R, T[:, :, None])[:, :, 0]
         self.assertTrue(torch.allclose(C, C_, atol=1e-05))
+
+    def test_render_by_r2n2_calibration(self):
+        """
+        Test rendering R2N2 models with calibration matrices from R2N2's own Blender
+        in batches.
+        """
+        # Set up device and seed for random selections.
+        device = torch.device("cuda:0")
+        torch.manual_seed(39)
+
+        # Load dataset in the train split.
+        r2n2_dataset = R2N2("train", SHAPENET_PATH, R2N2_PATH, SPLITS_PATH)
+        model_idxs = torch.randint(1000, (2,)).tolist()
+        view_idxs = torch.randint(24, (2,)).tolist()
+        raster_settings = RasterizationSettings(image_size=512)
+        lights = PointLights(
+            location=torch.tensor([0.0, 1.0, -2.0], device=device)[None],
+            # TODO(nikhilar): debug the source of the discrepancy in two images when
+            # rendering on GPU.
+            diffuse_color=((0, 0, 0),),
+            specular_color=((0, 0, 0),),
+            device=device,
+        )
+        r2n2_batch = r2n2_dataset.render(
+            idxs=model_idxs,
+            view_idxs=view_idxs,
+            device=device,
+            raster_settings=raster_settings,
+            lights=lights,
+        )
+        for idx in range(4):
+            r2n2_batch_rgb = r2n2_batch[idx, ..., :3].squeeze().cpu()
+            if DEBUG:
+                Image.fromarray((r2n2_batch_rgb.numpy() * 255).astype(np.uint8)).save(
+                    DATA_DIR
+                    / ("DEBUG_r2n2_render_with_blender_calibrations_%s.png" % idx)
+                )
+            image_ref = load_rgb_image(
+                "test_r2n2_render_with_blender_calibrations_%s.png" % idx, DATA_DIR
+            )
+            self.assertClose(r2n2_batch_rgb, image_ref, atol=0.05)
+
+    def test_render_voxels(self):
+        """
+        Test rendering meshes formed from voxels.
+        """
+        # Set up device and seed for random selections.
+        device = torch.device("cuda:0")
+
+        # Load dataset in the train split with only a single view returned for each model.
+        r2n2_dataset = R2N2(
+            "train", SHAPENET_PATH, R2N2_PATH, SPLITS_PATH, return_voxels=True
+        )
+        r2n2_model = r2n2_dataset[6, [5]]
+        vox_render = render_cubified_voxels(r2n2_model["voxels"], device=device)
+        vox_render_rgb = vox_render[0, ..., :3].squeeze().cpu()
+        if DEBUG:
+            Image.fromarray((vox_render_rgb.numpy() * 255).astype(np.uint8)).save(
+                DATA_DIR / ("DEBUG_r2n2_voxel_to_mesh_render.png")
+            )
+        image_ref = load_rgb_image("test_r2n2_voxel_to_mesh_render.png", DATA_DIR)
+        self.assertClose(vox_render_rgb, image_ref, atol=0.05)

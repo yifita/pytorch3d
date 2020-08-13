@@ -13,8 +13,9 @@ import yaml
 
 # The CUDA versions which have pytorch conda packages available for linux for each
 # version of pytorch.
+# Pytorch 1.4 also supports cuda 10.0 but we no longer build for cuda 10.0 at all.
 CONDA_CUDA_VERSIONS = {
-    "1.4": ["cu92", "cu100", "cu101"],
+    "1.4": ["cu92", "cu101"],
     "1.5.0": ["cu92", "cu101", "cu102"],
     "1.5.1": ["cu92", "cu101", "cu102"],
     "1.6.0": ["cu92", "cu101", "cu102"],
@@ -38,7 +39,7 @@ def workflows(prefix="", filter_branch=None, upload=False, indentation=6):
                     )
     for btype in ["wheel"]:
         for python_version in ["3.6", "3.7", "3.8"]:
-            for cu_version in ["cpu"]:
+            for cu_version in ["cu102"]:
                 w += workflow_pair(
                     btype=btype,
                     python_version=python_version,
