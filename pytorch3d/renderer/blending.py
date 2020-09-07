@@ -3,7 +3,6 @@
 
 from typing import NamedTuple, Sequence
 
-import numpy as np
 import torch
 
 # pyre-fixme[21]: Could not find name `_C` in `pytorch3d`.
@@ -46,7 +45,10 @@ def hard_rgb_blend(colors, fragments, blend_params) -> torch.Tensor:
     # Mask for the background.
     is_background = fragments.pix_to_face[..., 0] < 0  # (N, H, W)
 
-    background_color = colors.new_tensor(blend_params.background_color)  # (3)
+    if torch.is_tensor(blend_params.background_color):
+        background_color = blend_params.background_color
+    else:
+        background_color = colors.new_tensor(blend_params.background_color)  # (3)
 
     # Find out how much background_color needs to be expanded to be used for masked_scatter.
     num_background_pixels = is_background.sum()
@@ -162,9 +164,8 @@ def softmax_rgb_blend(
     if not torch.is_tensor(background):
         background = torch.tensor(background, dtype=torch.float32, device=device)
 
-    # Background color
-    delta = np.exp(1e-10 / blend_params.gamma) * 1e-10
-    delta = torch.tensor(delta, device=device)
+    # Weight for background color
+    eps = 1e-10
 
     # Mask for padded pixels.
     mask = fragments.pix_to_face >= 0
@@ -189,15 +190,20 @@ def softmax_rgb_blend(
     # pyre-fixme[6]: Expected `Tensor` for 1st param but got `float`.
     weights_num = prob_map * torch.exp((z_inv - z_inv_max) / blend_params.gamma)
 
+    # Also apply exp normalize trick for the background color weight.
+    # Clamp to ensure delta is never 0.
+    # pyre-fixme[20]: Argument `max` expected.
+    # pyre-fixme[6]: Expected `Tensor` for 1st param but got `float`.
+    delta = torch.exp((eps - z_inv_max) / blend_params.gamma).clamp(min=eps)
+
     # Normalize weights.
     # weights_num shape: (N, H, W, K). Sum over K and divide through by the sum.
     denom = weights_num.sum(dim=-1)[..., None] + delta
-    weights = weights_num / denom
 
     # Sum: weights * textures + background color
-    weighted_colors = (weights[..., None] * colors).sum(dim=-2)
-    weighted_background = (delta / denom) * background
-    pixel_colors[..., :3] = weighted_colors + weighted_background
+    weighted_colors = (weights_num[..., None] * colors).sum(dim=-2)
+    weighted_background = delta * background
+    pixel_colors[..., :3] = (weighted_colors + weighted_background) / denom
     pixel_colors[..., 3] = 1.0 - alpha
 
     return pixel_colors

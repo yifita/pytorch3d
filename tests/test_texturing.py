@@ -12,6 +12,7 @@ from pytorch3d.renderer.mesh.textures import (
     TexturesUV,
     TexturesVertex,
     _list_to_padded_wrapper,
+    pack_rectangles,
 )
 from pytorch3d.structures import Meshes, list_to_packed, packed_to_list
 from test_meshes import TestMeshes
@@ -29,8 +30,8 @@ def tryindex(self, index, tex, meshes, source):
             basic = basic[None]
 
         if len(basic) == 0:
-            self.assertEquals(len(from_texture), 0)
-            self.assertEquals(len(from_meshes), 0)
+            self.assertEqual(len(from_texture), 0)
+            self.assertEqual(len(from_meshes), 0)
         else:
             self.assertClose(basic, from_texture)
             self.assertClose(basic, from_meshes)
@@ -113,11 +114,37 @@ class TestTexturesVertex(TestCaseMixin, unittest.TestCase):
 
     def test_clone(self):
         tex = TexturesVertex(verts_features=torch.rand(size=(10, 100, 128)))
+        tex.verts_features_list()
         tex_cloned = tex.clone()
         self.assertSeparate(
             tex._verts_features_padded, tex_cloned._verts_features_padded
         )
+        self.assertClose(tex._verts_features_padded, tex_cloned._verts_features_padded)
         self.assertSeparate(tex.valid, tex_cloned.valid)
+        self.assertTrue(tex.valid.eq(tex_cloned.valid).all())
+        for i in range(tex._N):
+            self.assertSeparate(
+                tex._verts_features_list[i], tex_cloned._verts_features_list[i]
+            )
+            self.assertClose(
+                tex._verts_features_list[i], tex_cloned._verts_features_list[i]
+            )
+
+    def test_detach(self):
+        tex = TexturesVertex(
+            verts_features=torch.rand(size=(10, 100, 128), requires_grad=True)
+        )
+        tex.verts_features_list()
+        tex_detached = tex.detach()
+        self.assertFalse(tex_detached._verts_features_padded.requires_grad)
+        self.assertClose(
+            tex_detached._verts_features_padded, tex._verts_features_padded
+        )
+        for i in range(tex._N):
+            self.assertClose(
+                tex._verts_features_list[i], tex_detached._verts_features_list[i]
+            )
+            self.assertFalse(tex_detached._verts_features_list[i].requires_grad)
 
     def test_extend(self):
         B = 10
@@ -278,9 +305,25 @@ class TestTexturesAtlas(TestCaseMixin, unittest.TestCase):
 
     def test_clone(self):
         tex = TexturesAtlas(atlas=torch.rand(size=(1, 10, 2, 2, 3)))
+        tex.atlas_list()
         tex_cloned = tex.clone()
         self.assertSeparate(tex._atlas_padded, tex_cloned._atlas_padded)
+        self.assertClose(tex._atlas_padded, tex_cloned._atlas_padded)
         self.assertSeparate(tex.valid, tex_cloned.valid)
+        self.assertTrue(tex.valid.eq(tex_cloned.valid).all())
+        for i in range(tex._N):
+            self.assertSeparate(tex._atlas_list[i], tex_cloned._atlas_list[i])
+            self.assertClose(tex._atlas_list[i], tex_cloned._atlas_list[i])
+
+    def test_detach(self):
+        tex = TexturesAtlas(atlas=torch.rand(size=(1, 10, 2, 2, 3), requires_grad=True))
+        tex.atlas_list()
+        tex_detached = tex.detach()
+        self.assertFalse(tex_detached._atlas_padded.requires_grad)
+        self.assertClose(tex_detached._atlas_padded, tex._atlas_padded)
+        for i in range(tex._N):
+            self.assertFalse(tex_detached._atlas_list[i].requires_grad)
+            self.assertClose(tex._atlas_list[i], tex_detached._atlas_list[i])
 
     def test_extend(self):
         B = 10
@@ -401,19 +444,26 @@ class TestTexturesUV(TestCaseMixin, unittest.TestCase):
             dists=pix_to_face,
         )
 
-        tex = TexturesUV(maps=tex_map, faces_uvs=[face_uvs], verts_uvs=[vert_uvs])
-        meshes = Meshes(verts=[dummy_verts], faces=[face_uvs], textures=tex)
-        mesh_textures = meshes.textures
-        texels = mesh_textures.sample_textures(fragments)
+        for align_corners in [True, False]:
+            tex = TexturesUV(
+                maps=tex_map,
+                faces_uvs=[face_uvs],
+                verts_uvs=[vert_uvs],
+                align_corners=align_corners,
+            )
+            meshes = Meshes(verts=[dummy_verts], faces=[face_uvs], textures=tex)
+            mesh_textures = meshes.textures
+            texels = mesh_textures.sample_textures(fragments)
 
-        # Expected output
-        pixel_uvs = interpolated_uvs * 2.0 - 1.0
-        pixel_uvs = pixel_uvs.view(2, 1, 1, 2)
-        tex_map = torch.flip(tex_map, [1])
-        tex_map = tex_map.permute(0, 3, 1, 2)
-        tex_map = torch.cat([tex_map, tex_map], dim=0)
-        expected_out = F.grid_sample(tex_map, pixel_uvs, align_corners=False)
-        self.assertTrue(torch.allclose(texels.squeeze(), expected_out.squeeze()))
+            # Expected output
+            pixel_uvs = interpolated_uvs * 2.0 - 1.0
+            pixel_uvs = pixel_uvs.view(2, 1, 1, 2)
+            tex_map_ = torch.flip(tex_map, [1]).permute(0, 3, 1, 2)
+            tex_map_ = torch.cat([tex_map_, tex_map_], dim=0)
+            expected_out = F.grid_sample(
+                tex_map_, pixel_uvs, align_corners=align_corners, padding_mode="border"
+            )
+            self.assertTrue(torch.allclose(texels.squeeze(), expected_out.squeeze()))
 
     def test_textures_uv_init_fail(self):
         # Maps has wrong shape
@@ -478,11 +528,49 @@ class TestTexturesUV(TestCaseMixin, unittest.TestCase):
             faces_uvs=torch.rand(size=(5, 10, 3)),
             verts_uvs=torch.rand(size=(5, 15, 2)),
         )
+        tex.faces_uvs_list()
+        tex.verts_uvs_list()
         tex_cloned = tex.clone()
         self.assertSeparate(tex._faces_uvs_padded, tex_cloned._faces_uvs_padded)
+        self.assertClose(tex._faces_uvs_padded, tex_cloned._faces_uvs_padded)
         self.assertSeparate(tex._verts_uvs_padded, tex_cloned._verts_uvs_padded)
+        self.assertClose(tex._verts_uvs_padded, tex_cloned._verts_uvs_padded)
         self.assertSeparate(tex._maps_padded, tex_cloned._maps_padded)
+        self.assertClose(tex._maps_padded, tex_cloned._maps_padded)
         self.assertSeparate(tex.valid, tex_cloned.valid)
+        self.assertTrue(tex.valid.eq(tex_cloned.valid).all())
+        for i in range(tex._N):
+            self.assertSeparate(tex._faces_uvs_list[i], tex_cloned._faces_uvs_list[i])
+            self.assertClose(tex._faces_uvs_list[i], tex_cloned._faces_uvs_list[i])
+            self.assertSeparate(tex._verts_uvs_list[i], tex_cloned._verts_uvs_list[i])
+            self.assertClose(tex._verts_uvs_list[i], tex_cloned._verts_uvs_list[i])
+            # tex._maps_list is not use anywhere so it's not stored. We call it explicitly
+            self.assertSeparate(tex.maps_list()[i], tex_cloned.maps_list()[i])
+            self.assertClose(tex.maps_list()[i], tex_cloned.maps_list()[i])
+
+    def test_detach(self):
+        tex = TexturesUV(
+            maps=torch.ones((5, 16, 16, 3), requires_grad=True),
+            faces_uvs=torch.rand(size=(5, 10, 3)),
+            verts_uvs=torch.rand(size=(5, 15, 2)),
+        )
+        tex.faces_uvs_list()
+        tex.verts_uvs_list()
+        tex_detached = tex.detach()
+        self.assertFalse(tex_detached._maps_padded.requires_grad)
+        self.assertClose(tex._maps_padded, tex_detached._maps_padded)
+        self.assertFalse(tex_detached._verts_uvs_padded.requires_grad)
+        self.assertClose(tex._verts_uvs_padded, tex_detached._verts_uvs_padded)
+        self.assertFalse(tex_detached._faces_uvs_padded.requires_grad)
+        self.assertClose(tex._faces_uvs_padded, tex_detached._faces_uvs_padded)
+        for i in range(tex._N):
+            self.assertFalse(tex_detached._verts_uvs_list[i].requires_grad)
+            self.assertClose(tex._verts_uvs_list[i], tex_detached._verts_uvs_list[i])
+            self.assertFalse(tex_detached._faces_uvs_list[i].requires_grad)
+            self.assertClose(tex._faces_uvs_list[i], tex_detached._faces_uvs_list[i])
+            # tex._maps_list is not use anywhere so it's not stored. We call it explicitly
+            self.assertFalse(tex_detached.maps_list()[i].requires_grad)
+            self.assertClose(tex.maps_list()[i], tex_detached.maps_list()[i])
 
     def test_extend(self):
         B = 5
@@ -508,10 +596,19 @@ class TestTexturesUV(TestCaseMixin, unittest.TestCase):
         tex_init = tex_mesh.textures
         new_tex = new_mesh.textures
 
+        new_tex_num_verts = new_mesh.num_verts_per_mesh()
         for i in range(len(tex_mesh)):
             for n in range(N):
+                tex_nv = new_tex_num_verts[i * N + n]
                 self.assertClose(
-                    tex_init.verts_uvs_list()[i], new_tex.verts_uvs_list()[i * N + n]
+                    # The original textures were initialized using
+                    # verts uvs list
+                    tex_init.verts_uvs_list()[i],
+                    # In the new textures, the verts_uvs are initialized
+                    # from padded. The verts per mesh are not used to
+                    # convert from padded to list. See TexturesUV for an
+                    # explanation.
+                    new_tex.verts_uvs_list()[i * N + n][:tex_nv, ...],
                 )
                 self.assertClose(
                     tex_init.faces_uvs_list()[i], new_tex.faces_uvs_list()[i * N + n]
@@ -528,12 +625,8 @@ class TestTexturesUV(TestCaseMixin, unittest.TestCase):
             [
                 tex_init.faces_uvs_padded(),
                 new_tex.faces_uvs_padded(),
-                tex_init.faces_uvs_packed(),
-                new_tex.faces_uvs_packed(),
                 tex_init.verts_uvs_padded(),
                 new_tex.verts_uvs_padded(),
-                tex_init.verts_uvs_packed(),
-                new_tex.verts_uvs_packed(),
                 tex_init.maps_padded(),
                 new_tex.maps_padded(),
             ]
@@ -566,11 +659,9 @@ class TestTexturesUV(TestCaseMixin, unittest.TestCase):
         tex1 = tex.clone()
         tex1._num_faces_per_mesh = num_faces_per_mesh
         tex1._num_verts_per_mesh = num_verts_per_mesh
-        verts_packed = tex1.verts_uvs_packed()
         verts_list = tex1.verts_uvs_list()
         verts_padded = tex1.verts_uvs_padded()
 
-        faces_packed = tex1.faces_uvs_packed()
         faces_list = tex1.faces_uvs_list()
         faces_padded = tex1.faces_uvs_padded()
 
@@ -580,9 +671,7 @@ class TestTexturesUV(TestCaseMixin, unittest.TestCase):
         for f1, f2 in zip(verts_list, verts_uvs_list):
             self.assertTrue((f1 == f2).all().item())
 
-        self.assertTrue(faces_packed.shape == (3 + 2, 3))
         self.assertTrue(faces_padded.shape == (2, 3, 3))
-        self.assertTrue(verts_packed.shape == (9 + 6, 2))
         self.assertTrue(verts_padded.shape == (2, 9, 2))
 
         # Case where num_faces_per_mesh is not set and faces_verts_uvs
@@ -592,15 +681,8 @@ class TestTexturesUV(TestCaseMixin, unittest.TestCase):
             verts_uvs=verts_padded,
             faces_uvs=faces_padded,
         )
-        faces_packed = tex2.faces_uvs_packed()
         faces_list = tex2.faces_uvs_list()
-        verts_packed = tex2.verts_uvs_packed()
         verts_list = tex2.verts_uvs_list()
-
-        # Packed is just flattened padded as num_faces_per_mesh
-        # has not been provided.
-        self.assertTrue(faces_packed.shape == (3 * 2, 3))
-        self.assertTrue(verts_packed.shape == (9 * 2, 2))
 
         for i, (f1, f2) in enumerate(zip(faces_list, faces_uvs_list)):
             n = num_faces_per_mesh[i]
@@ -649,3 +731,80 @@ class TestTexturesUV(TestCaseMixin, unittest.TestCase):
         index = torch.tensor([1, 2], dtype=torch.int64)
         tryindex(self, index, tex, meshes, source)
         tryindex(self, [2, 4], tex, meshes, source)
+
+
+class TestRectanglePacking(TestCaseMixin, unittest.TestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        torch.manual_seed(42)
+
+    def wrap_pack(self, sizes):
+        """
+        Call the pack_rectangles function, which we want to test,
+        and return its outputs.
+        Additionally makes some sanity checks on the output.
+        """
+        res = pack_rectangles(sizes)
+        total = res.total_size
+        self.assertGreaterEqual(total[0], 0)
+        self.assertGreaterEqual(total[1], 0)
+        mask = torch.zeros(total, dtype=torch.bool)
+        seen_x_bound = False
+        seen_y_bound = False
+        for (in_x, in_y), loc in zip(sizes, res.locations):
+            self.assertGreaterEqual(loc[0], 0)
+            self.assertGreaterEqual(loc[1], 0)
+            placed_x, placed_y = (in_y, in_x) if loc[2] else (in_x, in_y)
+            upper_x = placed_x + loc[0]
+            upper_y = placed_y + loc[1]
+            self.assertGreaterEqual(total[0], upper_x)
+            if total[0] == upper_x:
+                seen_x_bound = True
+            self.assertGreaterEqual(total[1], upper_y)
+            if total[1] == upper_y:
+                seen_y_bound = True
+            already_taken = torch.sum(mask[loc[0] : upper_x, loc[1] : upper_y])
+            self.assertEqual(already_taken, 0)
+            mask[loc[0] : upper_x, loc[1] : upper_y] = 1
+        self.assertTrue(seen_x_bound)
+        self.assertTrue(seen_y_bound)
+
+        self.assertTrue(torch.all(torch.sum(mask, dim=0, dtype=torch.int32) > 0))
+        self.assertTrue(torch.all(torch.sum(mask, dim=1, dtype=torch.int32) > 0))
+        return res
+
+    def assert_bb(self, sizes, expected):
+        """
+        Apply the pack_rectangles function to sizes and verify the
+        bounding box dimensions are expected.
+        """
+        self.assertSetEqual(set(self.wrap_pack(sizes).total_size), expected)
+
+    def test_simple(self):
+        self.assert_bb([(3, 4), (4, 3)], {6, 4})
+        self.assert_bb([(2, 2), (2, 4), (2, 2)], {4, 4})
+
+        # many squares
+        self.assert_bb([(2, 2)] * 9, {2, 18})
+
+        # One big square and many small ones.
+        self.assert_bb([(3, 3)] + [(1, 1)] * 2, {3, 4})
+        self.assert_bb([(3, 3)] + [(1, 1)] * 3, {3, 4})
+        self.assert_bb([(3, 3)] + [(1, 1)] * 4, {3, 5})
+        self.assert_bb([(3, 3)] + [(1, 1)] * 5, {3, 5})
+        self.assert_bb([(1, 1)] * 6 + [(3, 3)], {3, 5})
+        self.assert_bb([(3, 3)] + [(1, 1)] * 7, {3, 6})
+
+        # many identical rectangles
+        self.assert_bb([(7, 190)] * 4 + [(190, 7)] * 4, {190, 56})
+
+        # require placing the flipped version of a rectangle
+        self.assert_bb([(1, 100), (5, 96), (4, 5)], {100, 6})
+
+    def test_random(self):
+        for _ in range(5):
+            vals = torch.randint(size=(20, 2), low=1, high=18)
+            sizes = []
+            for j in range(vals.shape[0]):
+                sizes.append((int(vals[j, 0]), int(vals[j, 1])))
+            self.wrap_pack(sizes)

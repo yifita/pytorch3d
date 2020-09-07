@@ -12,7 +12,7 @@ from common_testing import TestCaseMixin, load_rgb_image
 from PIL import Image
 from pytorch3d.datasets import ShapeNetCore, collate_batched_meshes
 from pytorch3d.renderer import (
-    OpenGLPerspectiveCameras,
+    FoVPerspectiveCameras,
     PointLights,
     RasterizationSettings,
     look_at_view_transform,
@@ -22,6 +22,7 @@ from torch.utils.data import DataLoader
 
 # Set the SHAPENET_PATH to the local path to the dataset
 SHAPENET_PATH = None
+VERSION = 1
 # If DEBUG=True, save out images generated in the tests for debugging.
 # All saved images have prefix DEBUG_
 DEBUG = False
@@ -55,7 +56,7 @@ class TestShapenetCore(TestCaseMixin, unittest.TestCase):
         self.assertTrue("Version number must be either 1 or 2." in str(err.exception))
 
         # Load ShapeNetCore without specifying any particular categories.
-        shapenet_dataset = ShapeNetCore(SHAPENET_PATH)
+        shapenet_dataset = ShapeNetCore(SHAPENET_PATH, version=VERSION)
 
         # Count the number of grandchildren directories (which should be equal to
         # the total number of objects in the dataset) by walking through the given
@@ -174,7 +175,7 @@ class TestShapenetCore(TestCaseMixin, unittest.TestCase):
 
         # Rendering settings.
         R, T = look_at_view_transform(1.0, 1.0, 90)
-        cameras = OpenGLPerspectiveCameras(R=R, T=T, device=device)
+        cameras = FoVPerspectiveCameras(R=R, T=T, device=device)
         raster_settings = RasterizationSettings(image_size=512)
         lights = PointLights(
             location=torch.tensor([0.0, 1.0, -2.0], device=device)[None],
