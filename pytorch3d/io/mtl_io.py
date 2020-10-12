@@ -3,7 +3,7 @@
 """This module implements utility functions for loading .mtl files and textures."""
 import os
 import warnings
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -15,7 +15,8 @@ def make_mesh_texture_atlas(
     material_properties: Dict,
     texture_images: Dict,
     face_material_names,
-    faces_verts_uvs: torch.Tensor,
+    faces_uvs: torch.Tensor,
+    verts_uvs: torch.Tensor,
     texture_size: int,
     texture_wrap: Optional[str],
 ) -> torch.Tensor:
@@ -31,8 +32,9 @@ def make_mesh_texture_atlas(
         face_material_names: numpy array of the material name corresponding to each
             face. Faces which don't have an associated material will be an empty string.
             For these faces, a uniform white texture is assigned.
-        faces_verts_uvs: LongTensor of shape (F, 3, 2) giving the uv coordinates for each
-            vertex in the face.
+        faces_uvs: LongTensor of shape (F, 3,) giving the index into the verts_uvs for
+            each face in the mesh.
+        verts_uvs: FloatTensor of shape (V, 2) giving the uv coordinates for each vertex.
         texture_size: the resolution of the per face texture map returned by this function.
             Each face will have a texture map of shape (texture_size, texture_size, 3).
         texture_wrap: string, one of ["repeat", "clamp", None]
@@ -47,15 +49,38 @@ def make_mesh_texture_atlas(
     """
     # Create an R x R texture map per face in the mesh
     R = texture_size
-    F = faces_verts_uvs.shape[0]
+    F = faces_uvs.shape[0]
 
     # Initialize the per face texture map to a white color.
     # TODO: allow customization of this base color?
-    # pyre-fixme[16]: `Tensor` has no attribute `new_ones`.
-    atlas = faces_verts_uvs.new_ones(size=(F, R, R, 3))
+    atlas = torch.ones(size=(F, R, R, 3), dtype=torch.float32, device=faces_uvs.device)
 
     # Check for empty materials.
     if not material_properties and not texture_images:
+        return atlas
+
+    # Iterate through the material properties - not
+    # all materials have texture images so this is
+    # done first separately to the texture interpolation.
+    for material_name, props in material_properties.items():
+        # Bool to indicate which faces use this texture map.
+        faces_material_ind = torch.from_numpy(face_material_names == material_name).to(
+            faces_uvs.device
+        )
+        if faces_material_ind.sum() > 0:
+            # For these faces, update the base color to the
+            # diffuse material color.
+            if "diffuse_color" not in props:
+                continue
+            atlas[faces_material_ind, ...] = props["diffuse_color"][None, :]
+
+    # If there are vertex texture coordinates, create an (F, 3, 2)
+    # tensor of the vertex textures per face.
+    faces_verts_uvs = verts_uvs[faces_uvs] if len(verts_uvs) > 0 else None
+
+    # Some meshes only have material properties and no texture image.
+    # In this case, return the atlas here.
+    if faces_verts_uvs is None:
         return atlas
 
     if texture_wrap == "repeat":
@@ -64,32 +89,14 @@ def make_mesh_texture_atlas(
         # will be ignored and a repeating pattern is formed.
         # Shapenet data uses this format see:
         # https://shapenet.org/qaforum/index.php?qa=15&qa_1=why-is-the-texture-coordinate-in-the-obj-file-not-in-the-range # noqa: B950
-        # pyre-fixme[16]: `ByteTensor` has no attribute `any`.
         if (faces_verts_uvs > 1).any() or (faces_verts_uvs < 0).any():
             msg = "Texture UV coordinates outside the range [0, 1]. \
                 The integer part will be ignored to form a repeating pattern."
             warnings.warn(msg)
-            # pyre-fixme[9]: faces_verts_uvs has type `Tensor`; used as `int`.
-            # pyre-fixme[6]: Expected `int` for 1st param but got `Tensor`.
             faces_verts_uvs = faces_verts_uvs % 1
     elif texture_wrap == "clamp":
         # Clamp uv coordinates to the [0, 1] range.
         faces_verts_uvs = faces_verts_uvs.clamp(0.0, 1.0)
-
-    # Iterate through the material properties - not
-    # all materials have texture images so this has to be
-    # done separately to the texture interpolation.
-    for material_name, props in material_properties.items():
-        # Bool to indicate which faces use this texture map.
-        faces_material_ind = torch.from_numpy(face_material_names == material_name).to(
-            faces_verts_uvs.device
-        )
-        if faces_material_ind.sum() > 0:
-            # For these faces, update the base color to the
-            # diffuse material color.
-            if "diffuse_color" not in props:
-                continue
-            atlas[faces_material_ind, ...] = props["diffuse_color"][None, :]
 
     # Iterate through the materials used in this mesh. Update the
     # texture atlas for the faces which use this material.
@@ -129,7 +136,7 @@ def make_material_atlas(
     the formulation from [1].
 
     For a triangle with vertices (v0, v1, v2) we can create a barycentric coordinate system
-    with the x axis being the vector (v1 - v0) and the y axis being the vector (v2 - v0).
+    with the x axis being the vector (v0 - v2) and the y axis being the vector (v1 - v2).
     The barycentric coordinates range from [0, 1] in the +x and +y direction so this creates
     a triangular texture space with vertices at (0, 1), (0, 0) and (1, 0).
 
@@ -379,7 +386,86 @@ def _bilinear_interpolation_grid_sample(
     return out.permute(0, 2, 3, 1)
 
 
-def load_mtl(f, material_names: List, data_dir: str, device="cpu"):
+MaterialProperties = Dict[str, Dict[str, torch.Tensor]]
+TextureFiles = Dict[str, str]
+TextureImages = Dict[str, torch.Tensor]
+
+
+def _parse_mtl(f, device="cpu") -> Tuple[MaterialProperties, TextureFiles]:
+    material_properties = {}
+    texture_files = {}
+    material_name = ""
+
+    with _open_file(f, "r") as f:
+        for line in f:
+            tokens = line.strip().split()
+            if not tokens:
+                continue
+            if tokens[0] == "newmtl":
+                material_name = tokens[1]
+                material_properties[material_name] = {}
+            elif tokens[0] == "map_Kd":
+                # Diffuse texture map
+                # Account for the case where filenames might have spaces
+                filename = line.strip()[7:]
+                texture_files[material_name] = filename
+            elif tokens[0] == "Kd":
+                # RGB diffuse reflectivity
+                kd = np.array(tokens[1:4]).astype(np.float32)
+                kd = torch.from_numpy(kd).to(device)
+                material_properties[material_name]["diffuse_color"] = kd
+            elif tokens[0] == "Ka":
+                # RGB ambient reflectivity
+                ka = np.array(tokens[1:4]).astype(np.float32)
+                ka = torch.from_numpy(ka).to(device)
+                material_properties[material_name]["ambient_color"] = ka
+            elif tokens[0] == "Ks":
+                # RGB specular reflectivity
+                ks = np.array(tokens[1:4]).astype(np.float32)
+                ks = torch.from_numpy(ks).to(device)
+                material_properties[material_name]["specular_color"] = ks
+            elif tokens[0] == "Ns":
+                # Specular exponent
+                ns = np.array(tokens[1:4]).astype(np.float32)
+                ns = torch.from_numpy(ns).to(device)
+                material_properties[material_name]["shininess"] = ns
+
+    return material_properties, texture_files
+
+
+def _load_texture_images(
+    material_names: List[str],
+    data_dir: str,
+    material_properties: MaterialProperties,
+    texture_files: TextureFiles,
+) -> Tuple[MaterialProperties, TextureImages]:
+    final_material_properties = {}
+    texture_images = {}
+
+    # Only keep the materials referenced in the obj.
+    for material_name in material_names:
+        if material_name in texture_files:
+            # Load the texture image.
+            path = os.path.join(data_dir, texture_files[material_name])
+            if os.path.isfile(path):
+                image = _read_image(path, format="RGB") / 255.0
+                image = torch.from_numpy(image)
+                texture_images[material_name] = image
+            else:
+                msg = f"Texture file does not exist: {path}"
+                warnings.warn(msg)
+
+        if material_name in material_properties:
+            final_material_properties[material_name] = material_properties[
+                material_name
+            ]
+
+    return final_material_properties, texture_images
+
+
+def load_mtl(
+    f, material_names: List[str], data_dir: str, device="cpu"
+) -> Tuple[MaterialProperties, TextureImages]:
     """
     Load texture images and material reflectivity values for ambient, diffuse
     and specular light (Ka, Kd, Ks, Ns).
@@ -390,8 +476,8 @@ def load_mtl(f, material_names: List, data_dir: str, device="cpu"):
         data_dir: the directory where the material texture files are located.
 
     Returns:
-        material_colors: dict of properties for each material. If a material
-                does not have any properties it will have an emtpy dict.
+        material_properties: dict of properties for each material. If a material
+                does not have any properties it will have an empty dict.
                 {
                     material_name_1:  {
                         "ambient_color": tensor of shape (1, 3),
@@ -408,58 +494,7 @@ def load_mtl(f, material_names: List, data_dir: str, device="cpu"):
                     ...
                 }
     """
-    texture_files = {}
-    material_colors = {}
-    material_properties = {}
-    texture_images = {}
-    material_name = ""
-
-    with _open_file(f) as f:
-        lines = [line.strip() for line in f]
-        for line in lines:
-            if len(line.split()) != 0:
-                if line.split()[0] == "newmtl":
-                    material_name = line.split()[1]
-                    material_colors[material_name] = {}
-                if line.split()[0] == "map_Kd":
-                    # Texture map.
-                    texture_files[material_name] = line.split()[1]
-                if line.split()[0] == "Kd":
-                    # RGB diffuse reflectivity
-                    kd = np.array(list(line.split()[1:4])).astype(np.float32)
-                    kd = torch.from_numpy(kd).to(device)
-                    material_colors[material_name]["diffuse_color"] = kd
-                if line.split()[0] == "Ka":
-                    # RGB ambient reflectivity
-                    ka = np.array(list(line.split()[1:4])).astype(np.float32)
-                    ka = torch.from_numpy(ka).to(device)
-                    material_colors[material_name]["ambient_color"] = ka
-                if line.split()[0] == "Ks":
-                    # RGB specular reflectivity
-                    ks = np.array(list(line.split()[1:4])).astype(np.float32)
-                    ks = torch.from_numpy(ks).to(device)
-                    material_colors[material_name]["specular_color"] = ks
-                if line.split()[0] == "Ns":
-                    # Specular exponent
-                    ns = np.array(list(line.split()[1:4])).astype(np.float32)
-                    ns = torch.from_numpy(ns).to(device)
-                    material_colors[material_name]["shininess"] = ns
-
-    # Only keep the materials referenced in the obj.
-    for name in material_names:
-        if name in texture_files:
-            # Load the texture image.
-            filename = texture_files[name]
-            filename_texture = os.path.join(data_dir, filename)
-            if os.path.isfile(filename_texture):
-                image = _read_image(filename_texture, format="RGB") / 255.0
-                image = torch.from_numpy(image)
-                texture_images[name] = image
-            else:
-                msg = f"Texture file does not exist: {filename_texture}"
-                warnings.warn(msg)
-
-        if name in material_colors:
-            material_properties[name] = material_colors[name]
-
-    return material_properties, texture_images
+    material_properties, texture_files = _parse_mtl(f, device)
+    return _load_texture_images(
+        material_names, data_dir, material_properties, texture_files
+    )

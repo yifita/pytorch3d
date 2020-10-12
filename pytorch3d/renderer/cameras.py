@@ -381,14 +381,17 @@ class FoVPerspectiveCameras(CamerasBase):
 
         .. code-block:: python
 
-            f1 = -(far + near)/(far−near)
-            f2 = -2*far*near/(far-near)
             h1 = (max_y + min_y)/(max_y - min_y)
             w1 = (max_x + min_x)/(max_x - min_x)
             tanhalffov = tan((fov/2))
             s1 = 1/tanhalffov
             s2 = 1/(tanhalffov * (aspect_ratio))
 
+            # To map z to the range [0, 1] use:
+            f1 =  far / (far - near)
+            f2 = -(far * near) / (far - near)
+
+            # Projection matrix
             P = [
                     [s1,   0,   w1,   0],
                     [0,   s2,   h1,   0],
@@ -688,7 +691,7 @@ we assume the parameters are in screen space.
 
 
 def SfMPerspectiveCameras(
-    focal_length=1.0, principal_point=((0.0, 0.0),), R=_R, T=_R, device="cpu"
+    focal_length=1.0, principal_point=((0.0, 0.0),), R=_R, T=_T, device="cpu"
 ):
     """
     SfMPerspectiveCameras has been DEPRECATED. Use PerspectiveCameras instead.
@@ -1226,6 +1229,12 @@ def look_at_rotation(
     z_axis = F.normalize(at - camera_position, eps=1e-5)
     x_axis = F.normalize(torch.cross(up, z_axis, dim=1), eps=1e-5)
     y_axis = F.normalize(torch.cross(z_axis, x_axis, dim=1), eps=1e-5)
+    is_close = torch.isclose(x_axis, torch.tensor(0.0), atol=5e-3).all(
+        dim=1, keepdim=True
+    )
+    if is_close.any():
+        replacement = F.normalize(torch.cross(y_axis, z_axis, dim=1), eps=1e-5)
+        x_axis = torch.where(is_close, replacement, x_axis)
     R = torch.cat((x_axis[:, None, :], y_axis[:, None, :], z_axis[:, None, :]), dim=1)
     return R.transpose(1, 2)
 
@@ -1251,7 +1260,7 @@ def look_at_view_transform(
         azim: angle in degrees or radians. The vector from the object to
             the camera is projected onto a horizontal plane y = 0.
             azim is the angle between the projected vector and a
-            reference vector at (1, 0, 0) on the reference plane (the horizontal plane).
+            reference vector at (0, 0, 1) on the reference plane (the horizontal plane).
         dist, elem and azim can be of shape (1), (N).
         degrees: boolean flag to indicate if the elevation and azimuth
             angles are specified in degrees or radians.
