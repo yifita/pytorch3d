@@ -106,9 +106,12 @@ class SoftPhongShader(nn.Module):
 
     def to(self, device):
         # Manually move to device modules which are not subclasses of nn.Module
-        self.cameras = self.cameras.to(device)
-        self.materials = self.materials.to(device)
-        self.lights = self.lights.to(device)
+        if self.cameras is not None:
+            self.cameras = self.cameras.to(device)
+        if self.materials is not None:
+            self.materials = self.materials.to(device)
+        if self.lights is not None:
+            self.lights = self.lights.to(device)
 
     def forward(self, fragments, meshes, **kwargs) -> torch.Tensor:
         cameras = kwargs.get("cameras", self.cameras)
@@ -298,9 +301,13 @@ class HardFlatShader(nn.Module):
 
     def to(self, device):
         # Manually move to device modules which are not subclasses of nn.Module
-        self.cameras = self.cameras.to(device)
-        self.materials = self.materials.to(device)
-        self.lights = self.lights.to(device)
+        if self.cameras is not None:
+            self.cameras = self.cameras.to(device)
+        if self.materials is not None:
+            self.materials = self.materials.to(device)
+        if self.lights is not None:
+            self.lights = self.lights.to(device)
+        return self
 
     def forward(self, fragments, meshes, **kwargs) -> torch.Tensor:
         cameras = kwargs.get("cameras", self.cameras)
