@@ -51,6 +51,17 @@ setup_cuda() {
 
   # Now work out the CUDA settings
   case "$CU_VERSION" in
+    cu110)
+      if [[ "$OSTYPE" == "msys" ]]; then
+        export CUDA_HOME="C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v11.0"
+      else
+        export CUDA_HOME=/usr/local/cuda-11.0/
+      fi
+      export FORCE_CUDA=1
+      # Hard-coding gencode flags is temporary situation until
+      # https://github.com/pytorch/pytorch/pull/23408 lands
+      export NVCC_FLAGS="-gencode=arch=compute_35,code=sm_35 -gencode=arch=compute_50,code=sm_50 -gencode=arch=compute_60,code=sm_60 -gencode=arch=compute_70,code=sm_70 -gencode=arch=compute_75,code=sm_75 -gencode=arch=compute_80,code=sm_80 -gencode=arch=compute_50,code=compute_50"
+      ;;
     cu102)
       if [[ "$OSTYPE" == "msys" ]]; then
         export CUDA_HOME="C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v10.2"
@@ -240,21 +251,32 @@ setup_conda_pytorch_constraint() {
 # Translate CUDA_VERSION into CUDA_CUDATOOLKIT_CONSTRAINT
 setup_conda_cudatoolkit_constraint() {
   export CONDA_CPUONLY_FEATURE=""
+  export CONDA_CUB_CONSTRAINT=""
   if [[ "$(uname)" == Darwin ]]; then
     export CONDA_CUDATOOLKIT_CONSTRAINT=""
   else
     case "$CU_VERSION" in
+      cu110)
+        export CONDA_CUDATOOLKIT_CONSTRAINT="- cudatoolkit >=11.0,<11.1 # [not osx]"
+        # Even though cudatoolkit 11.0 provides CUB we need our own, to control the
+        # version, because the built-in 1.9.9 in the cudatoolkit causes problems.
+        export CONDA_CUB_CONSTRAINT="- nvidiacub"
+        ;;
       cu102)
         export CONDA_CUDATOOLKIT_CONSTRAINT="- cudatoolkit >=10.2,<10.3 # [not osx]"
+        export CONDA_CUB_CONSTRAINT="- nvidiacub"
         ;;
       cu101)
         export CONDA_CUDATOOLKIT_CONSTRAINT="- cudatoolkit >=10.1,<10.2 # [not osx]"
+        export CONDA_CUB_CONSTRAINT="- nvidiacub"
         ;;
       cu100)
         export CONDA_CUDATOOLKIT_CONSTRAINT="- cudatoolkit >=10.0,<10.1 # [not osx]"
+        export CONDA_CUB_CONSTRAINT="- nvidiacub"
         ;;
       cu92)
         export CONDA_CUDATOOLKIT_CONSTRAINT="- cudatoolkit >=9.2,<9.3 # [not osx]"
+        export CONDA_CUB_CONSTRAINT="- nvidiacub"
         ;;
       cpu)
         export CONDA_CUDATOOLKIT_CONSTRAINT=""
@@ -277,4 +299,18 @@ setup_visual_studio_constraint() {
       conda build $CONDA_CHANNEL_FLAGS --no-anaconda-upload packaging/$VSTOOLCHAIN_PACKAGE
       cp packaging/$VSTOOLCHAIN_PACKAGE/conda_build_config.yaml packaging/pytorch3d/conda_build_config.yaml
   fi
+}
+
+download_nvidiacub_if_needed() {
+  case "$CU_VERSION" in
+    cu110|cu102|cu101|cu100|cu92)
+      echo "Downloading cub"
+      wget --no-verbose https://github.com/NVIDIA/cub/archive/1.10.0.tar.gz
+      tar xzf 1.10.0.tar.gz
+      CUB_HOME=$(realpath ./cub-1.10.0)
+      export CUB_HOME
+      echo "CUB_HOME is now $CUB_HOME"
+      ;;
+  esac
+  # We don't need CUB for a cpu build or if cuda is 11.1 or higher
 }

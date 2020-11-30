@@ -61,7 +61,7 @@ class Meshes(object):
         [0.2, 0.3, 0.4],       |       [0.7, 0.3, 0.6],  |
         [0.9, 0.3, 0.8],       |       [0.2, 0.4, 0.8],  |
       ]                        |       [0.9, 0.5, 0.2],  |
-   ])                          |       [0.2, 0.3, 0.4],  |
+    ])                         |       [0.2, 0.3, 0.4],  |
                                |       [0.9, 0.3, 0.8],  |
                                |     ]                   |
                                |  ])                     |
@@ -1035,9 +1035,7 @@ class Meshes(object):
         self._edges_packed = torch.stack([u // V, u % V], dim=1)
         self._edges_packed_to_mesh_idx = edge_to_mesh[unique_idx]
 
-        face_to_edge = torch.arange(3 * F).view(3, F).t()
-        face_to_edge = inverse_idxs[face_to_edge]
-        self._faces_packed_to_edges_packed = face_to_edge
+        self._faces_packed_to_edges_packed = inverse_idxs.reshape(3, F).t()
 
         # Compute number of edges per mesh
         num_edges_per_mesh = torch.zeros(self._N, dtype=torch.int32, device=self.device)

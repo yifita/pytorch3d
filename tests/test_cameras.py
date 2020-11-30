@@ -32,10 +32,6 @@ import unittest
 import numpy as np
 import torch
 from common_testing import TestCaseMixin
-from pytorch3d.renderer.cameras import OpenGLOrthographicCameras  # deprecated
-from pytorch3d.renderer.cameras import OpenGLPerspectiveCameras  # deprecated
-from pytorch3d.renderer.cameras import SfMOrthographicCameras  # deprecated
-from pytorch3d.renderer.cameras import SfMPerspectiveCameras  # deprecated
 from pytorch3d.renderer.cameras import (
     CamerasBase,
     FoVOrthographicCameras,
@@ -47,6 +43,10 @@ from pytorch3d.renderer.cameras import (
     look_at_rotation,
     look_at_view_transform,
 )
+from pytorch3d.renderer.cameras import OpenGLOrthographicCameras  # deprecated
+from pytorch3d.renderer.cameras import OpenGLPerspectiveCameras  # deprecated
+from pytorch3d.renderer.cameras import SfMOrthographicCameras  # deprecated
+from pytorch3d.renderer.cameras import SfMPerspectiveCameras  # deprecated
 from pytorch3d.transforms import Transform3d
 from pytorch3d.transforms.rotation_conversions import random_rotations
 from pytorch3d.transforms.so3 import so3_exponential_map
@@ -449,6 +449,20 @@ class TestCameraHelpers(TestCaseMixin, unittest.TestCase):
 
 
 class TestCamerasCommon(TestCaseMixin, unittest.TestCase):
+    def test_K(self, batch_size=10):
+        T = torch.randn(batch_size, 3)
+        R = random_rotations(batch_size)
+        K = torch.randn(batch_size, 4, 4)
+        for cam_type in (
+            FoVOrthographicCameras,
+            FoVPerspectiveCameras,
+            OrthographicCameras,
+            PerspectiveCameras,
+        ):
+            cam = cam_type(R=R, T=T, K=K)
+            cam.get_projection_transform()
+            # Just checking that we don't crash or anything
+
     def test_view_transform_class_method(self):
         T = torch.tensor([0.0, 0.0, -1.0], requires_grad=True).view(1, -1)
         R = look_at_rotation(T)

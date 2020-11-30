@@ -1,9 +1,11 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All rights reserved.
 
 from .rotation_conversions import (
+    axis_angle_to_matrix,
     euler_angles_to_matrix,
     matrix_to_euler_angles,
     matrix_to_quaternion,
+    matrix_to_rotation_6d,
     quaternion_apply,
     quaternion_invert,
     quaternion_multiply,
@@ -12,6 +14,7 @@ from .rotation_conversions import (
     random_quaternions,
     random_rotation,
     random_rotations,
+    rotation_6d_to_matrix,
     standardize_quaternion,
 )
 from .so3 import (

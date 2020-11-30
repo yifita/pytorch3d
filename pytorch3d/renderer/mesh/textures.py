@@ -282,24 +282,24 @@ def Textures(
     verts_rgb: Optional[torch.Tensor] = None,
 ) -> TexturesBase:
     """
-        Textures class has been DEPRECATED.
-        Preserving Textures as a function for backwards compatibility.
+    Textures class has been DEPRECATED.
+    Preserving Textures as a function for backwards compatibility.
 
-        Args:
-            maps: texture map per mesh. This can either be a list of maps
-              [(H, W, 3)] or a padded tensor of shape (N, H, W, 3).
-            faces_uvs: (N, F, 3) tensor giving the index into verts_uvs for each
-                vertex in the face. Padding value is assumed to be -1.
-            verts_uvs: (N, V, 2) tensor giving the uv coordinate per vertex.
-            verts_rgb: (N, V, 3) tensor giving the rgb color per vertex. Padding
-                value is assumed to be -1.
+    Args:
+        maps: texture map per mesh. This can either be a list of maps
+          [(H, W, 3)] or a padded tensor of shape (N, H, W, 3).
+        faces_uvs: (N, F, 3) tensor giving the index into verts_uvs for each
+            vertex in the face. Padding value is assumed to be -1.
+        verts_uvs: (N, V, 2) tensor giving the uv coordinate per vertex.
+        verts_rgb: (N, V, 3) tensor giving the rgb color per vertex. Padding
+            value is assumed to be -1.
 
 
-        Returns:
-            a Textures class which is an instance of TexturesBase e.g. TexturesUV,
-            TexturesAtlas, TexturesVertex
+    Returns:
+        a Textures class which is an instance of TexturesBase e.g. TexturesUV,
+        TexturesAtlas, TexturesVertex
 
-        """
+    """
 
     warnings.warn(
         """Textures class is deprecated,
@@ -1173,6 +1173,42 @@ class TexturesUV(TexturesBase):
             align_corners=self.align_corners,
             padding_mode=self.padding_mode,
         )
+
+    def centers_for_image(self, index):
+        """
+        Return the locations in the texture map which correspond to the given
+        verts_uvs, for one of the meshes. This is potentially useful for
+        visualizing the data. See the texturesuv_image_matplotlib and
+        texturesuv_image_PIL functions.
+
+        Args:
+            index: batch index of the mesh whose centers to return.
+
+        Returns:
+            centers: coordinates of points in the texture image
+                - a FloatTensor of shape (V,2)
+        """
+        if self._N != 1:
+            raise ValueError(
+                "This function only supports plotting textures for one mesh."
+            )
+        texture_image = self.maps_padded()
+        verts_uvs = self.verts_uvs_list()[index][None]
+        _, H, W, _3 = texture_image.shape
+        coord1 = torch.arange(W).expand(H, W)
+        coord2 = torch.arange(H)[:, None].expand(H, W)
+        coords = torch.stack([coord1, coord2])[None]
+        with torch.no_grad():
+            # Get xy cartesian coordinates based on the uv coordinates
+            centers = F.grid_sample(
+                torch.flip(coords.to(texture_image), [2]),
+                # Convert from [0, 1] -> [-1, 1] range expected by grid sample
+                verts_uvs[:, None] * 2.0 - 1,
+                align_corners=self.align_corners,
+                padding_mode=self.padding_mode,
+            ).cpu()
+            centers = centers[0, :, 0].T
+        return centers
 
 
 class TexturesVertex(TexturesBase):

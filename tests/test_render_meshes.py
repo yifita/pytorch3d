@@ -24,7 +24,7 @@ from pytorch3d.renderer.lighting import PointLights
 from pytorch3d.renderer.materials import Materials
 from pytorch3d.renderer.mesh import TexturesAtlas, TexturesUV, TexturesVertex
 from pytorch3d.renderer.mesh.rasterizer import MeshRasterizer, RasterizationSettings
-from pytorch3d.renderer.mesh.renderer import MeshRenderer
+from pytorch3d.renderer.mesh.renderer import MeshRenderer, MeshRendererWithFragments
 from pytorch3d.renderer.mesh.shader import (
     BlendParams,
     HardFlatShader,
@@ -50,7 +50,7 @@ DATA_DIR = Path(__file__).resolve().parent / "data"
 
 
 class TestRenderMeshes(TestCaseMixin, unittest.TestCase):
-    def test_simple_sphere(self, elevated_camera=False):
+    def test_simple_sphere(self, elevated_camera=False, check_depth=False):
         """
         Test output of phong and gouraud shading matches a reference image using
         the default values for the light sources.
@@ -114,8 +114,16 @@ class TestRenderMeshes(TestCaseMixin, unittest.TestCase):
                     materials=materials,
                     blend_params=blend_params,
                 )
-                renderer = MeshRenderer(rasterizer=rasterizer, shader=shader)
-                images = renderer(sphere_mesh)
+                if check_depth:
+                    renderer = MeshRendererWithFragments(
+                        rasterizer=rasterizer, shader=shader
+                    )
+                    images, fragments = renderer(sphere_mesh)
+                    self.assertClose(fragments.zbuf, rasterizer(sphere_mesh).zbuf)
+                else:
+                    renderer = MeshRenderer(rasterizer=rasterizer, shader=shader)
+                    images = renderer(sphere_mesh)
+
                 rgb = images[0, ..., :3].squeeze().cpu()
                 filename = "simple_sphere_light_%s%s%s.png" % (
                     name,
@@ -144,8 +152,19 @@ class TestRenderMeshes(TestCaseMixin, unittest.TestCase):
                 materials=materials,
                 blend_params=blend_params,
             )
-            phong_renderer = MeshRenderer(rasterizer=rasterizer, shader=phong_shader)
-            images = phong_renderer(sphere_mesh, lights=lights)
+            if check_depth:
+                phong_renderer = MeshRendererWithFragments(
+                    rasterizer=rasterizer, shader=phong_shader
+                )
+                images, fragments = phong_renderer(sphere_mesh, lights=lights)
+                self.assertClose(
+                    fragments.zbuf, rasterizer(sphere_mesh, lights=lights).zbuf
+                )
+            else:
+                phong_renderer = MeshRenderer(
+                    rasterizer=rasterizer, shader=phong_shader
+                )
+                images = phong_renderer(sphere_mesh, lights=lights)
             rgb = images[0, ..., :3].squeeze().cpu()
             if DEBUG:
                 filename = "DEBUG_simple_sphere_dark%s%s.png" % (
@@ -170,6 +189,15 @@ class TestRenderMeshes(TestCaseMixin, unittest.TestCase):
         The rendering is performed with a camera that has non-zero elevation.
         """
         self.test_simple_sphere(elevated_camera=True)
+
+    def test_simple_sphere_depth(self):
+        """
+        Test output of phong and gouraud shading matches a reference image using
+        the default values for the light sources.
+
+        The rendering is performed with a camera that has non-zero elevation.
+        """
+        self.test_simple_sphere(check_depth=True)
 
     def test_simple_sphere_screen(self):
 
@@ -1042,67 +1070,3 @@ class TestRenderMeshes(TestCaseMixin, unittest.TestCase):
                 )
 
             self.assertClose(rgb, image_ref, atol=0.05)
-
-    def test_to(self):
-        # Test moving all the tensors in the renderer to a new device
-        # to support multigpu rendering.
-        device1 = torch.device("cpu")
-
-        R, T = look_at_view_transform(1500, 0.0, 0.0)
-
-        # Init shader settings
-        materials = Materials(device=device1)
-        lights = PointLights(device=device1)
-        lights.location = torch.tensor([0.0, 0.0, +1000.0], device=device1)[None]
-
-        raster_settings = RasterizationSettings(
-            image_size=256, blur_radius=0.0, faces_per_pixel=1
-        )
-        cameras = FoVPerspectiveCameras(
-            device=device1, R=R, T=T, aspect_ratio=1.0, fov=60.0, zfar=100
-        )
-        rasterizer = MeshRasterizer(cameras=cameras, raster_settings=raster_settings)
-
-        blend_params = BlendParams(
-            1e-4,
-            1e-4,
-            background_color=torch.zeros(3, dtype=torch.float32, device=device1),
-        )
-
-        shader = SoftPhongShader(
-            lights=lights,
-            cameras=cameras,
-            materials=materials,
-            blend_params=blend_params,
-        )
-        renderer = MeshRenderer(rasterizer=rasterizer, shader=shader)
-
-        def _check_props_on_device(renderer, device):
-            self.assertEqual(renderer.rasterizer.cameras.device, device)
-            self.assertEqual(renderer.shader.cameras.device, device)
-            self.assertEqual(renderer.shader.lights.device, device)
-            self.assertEqual(renderer.shader.lights.ambient_color.device, device)
-            self.assertEqual(renderer.shader.materials.device, device)
-            self.assertEqual(renderer.shader.materials.ambient_color.device, device)
-
-        mesh = ico_sphere(2, device1)
-        verts_padded = mesh.verts_padded()
-        textures = TexturesVertex(
-            verts_features=torch.ones_like(verts_padded, device=device1)
-        )
-        mesh.textures = textures
-        _check_props_on_device(renderer, device1)
-
-        # Test rendering on cpu
-        output_images = renderer(mesh)
-        self.assertEqual(output_images.device, device1)
-
-        # Move renderer and mesh to another device and re render
-        # This also tests that background_color is correctly moved to
-        # the new device
-        device2 = torch.device("cuda:0")
-        renderer.to(device2)
-        mesh = mesh.to(device2)
-        _check_props_on_device(renderer, device2)
-        output_images = renderer(mesh)
-        self.assertEqual(output_images.device, device2)

@@ -9,23 +9,37 @@ The core library is written in PyTorch. Several components have underlying imple
 
 - Linux or macOS or Windows
 - Python 3.6, 3.7 or 3.8
-- PyTorch 1.4, 1.5.0, 1.5.1 or 1.6.0
+- PyTorch 1.4, 1.5.0, 1.5.1, 1.6.0, or 1.7.0.
 - torchvision that matches the PyTorch installation. You can install them together as explained at pytorch.org to make sure of this.
 - gcc & g++ ≥ 4.9
 - [fvcore](https://github.com/facebookresearch/fvcore)
-- If CUDA is to be used, use at least version 9.2.
+- If CUDA is to be used, use a version which is supported by the corresponding pytorch version and at least version 9.2.
+- If CUDA is to be used and you are building from source, the CUB library must be available. We recommend version 1.10.0.
 
-These can be installed by running:
+The runtime dependencies can be installed by running:
 ```
 conda create -n pytorch3d python=3.8
 conda activate pytorch3d
-conda install -c pytorch pytorch=1.6.0 torchvision cudatoolkit=10.2
+conda install -c pytorch pytorch=1.7.0 torchvision cudatoolkit=10.2
 conda install -c conda-forge -c fvcore fvcore
+```
+
+For the CUB build time dependency, if you are using conda, you can continue with
+```
+conda install -c bottler nvidiacub
+```
+Otherwise download the CUB library from https://github.com/NVIDIA/cub/releases and unpack it to a folder of your choice.
+Define the environment variable CUB_HOME before building and point it to the directory that contains `CMakeLists.txt` for CUB.
+For example on Linux/Mac,
+```
+curl -LO https://github.com/NVIDIA/cub/archive/1.10.0.tar.gz
+tar xzf 1.10.0.tar.gz
+export CUB_HOME=$PWD/cub-1.10.0
 ```
 
 ### Tests/Linting and Demos
 
-For developing on top of PyTorch3D or contributing, you will need to run the linter and tests. If you want to run any of the notebook tutorials as `docs/tutorials` you will also need matplotlib.
+For developing on top of PyTorch3D or contributing, you will need to run the linter and tests. If you want to run any of the notebook tutorials as `docs/tutorials` or the examples in `docs/examples` you will also need matplotlib and OpenCV.
 - scikit-image
 - black
 - isort
@@ -35,12 +49,13 @@ For developing on top of PyTorch3D or contributing, you will need to run the lin
 - jupyter
 - imageio
 - plotly
+- opencv-python
 
 These can be installed by running:
 ```
-# Demos
+# Demos and examples
 conda install jupyter
-pip install scikit-image matplotlib imageio plotly
+pip install scikit-image matplotlib imageio plotly opencv-python
 
 # Tests/Linting
 pip install black 'isort<5' flake8 flake8-bugbear flake8-comprehensions
@@ -81,6 +96,8 @@ To install using the code of the released version instead of from the main branc
 pip install 'git+https://github.com/facebookresearch/pytorch3d.git@stable'
 ```
 
+For CUDA builds with versions earlier than CUDA 11, set `CUB_HOME` before building as described above.
+
 **Install from Github on macOS:**
 Some environment variables should be provided, like this.
 ```
@@ -92,7 +109,7 @@ MACOSX_DEPLOYMENT_TARGET=10.14 CC=clang CXX=clang++ pip install 'git+https://git
 git clone https://github.com/facebookresearch/pytorch3d.git
 cd pytorch3d && pip install -e .
 ```
-To rebuild after installing from a local clone run, `rm -rf build/ **/*.so` then `pip install -e .`. You often need to rebuild pytorch3d after reinstalling PyTorch.
+To rebuild after installing from a local clone run, `rm -rf build/ **/*.so` then `pip install -e .`. You often need to rebuild pytorch3d after reinstalling PyTorch. For CUDA builds with versions earlier than CUDA 11, set `CUB_HOME` before building as described above.
 
 **Install from local clone on macOS:**
 ```
